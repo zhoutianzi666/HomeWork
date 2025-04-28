@@ -3,11 +3,13 @@ import paddle
 import paddle.distributed as dist
 import paddle.distributed.communication.deep_ep as ep
 from paddle.base import core
-from paddle.base.core import Config
 from paddle.distributed import fleet
 from paddle.distributed.communication.group import Group
 
 num_ranks = dist.get_world_size()
+rank_id = dist.get_rank()
+paddle.seed(rank_id + 100)
+
 strategy = fleet.DistributedStrategy()
 strategy.hybrid_configs = {"dp_degree": 1, "mp_degree": num_ranks, "pp_degree": 1}
 fleet.init(is_collective=True, strategy=strategy)
@@ -42,8 +44,8 @@ aa = paddle.randn([120,300])
 for i in range(100):
     packed_recv_x, packed_recv_count, handle1, event, hook = buffer.low_latency_dispatch(x, topk_idx, num_tokens, num_experts,False, False, return_recv_hook=True)
     
-    # for j in range(200):
-    #     aa = aa + aa
+    for j in range(200):
+        aa = aa + aa
     paddle.distributed.barrier()
 
     if hook is not None:
@@ -67,9 +69,17 @@ for i in range(100):
 
 core.nvprof_stop()
 
-rank_id = dist.get_rank()
+
 num_local_experts = num_experts // num_ranks
 start_ep_id = rank_id * num_local_experts
+end_ep_id = start_ep_id + num_local_experts
+
+num_tokens_send_by_rdma = 0
+for token_id in range(topk_idx.shape[0]):
+    for dst_expert_id in topk_idx[token_id].numpy().tolist():
+        if dst_expert_id not in range(start_ep_id, end_ep_id):
+            num_tokens_send_by_rdma += 1
+print("num_tokens_send_by_rdma:", num_tokens_send_by_rdma)
 
 for token_id in range(gather_topk_idx.shape[0]):
     tmp = gather_topk_idx[token_id].numpy().tolist()
@@ -80,4 +90,6 @@ for token_id in range(gather_topk_idx.shape[0]):
             deep_ep_res = packed_recv_x[local_ep_id,:packed_recv_count[local_ep_id],:].view("int16")
             diff = paddle.bitwise_xor(token, deep_ep_res)
             diff = diff.cast("int32").abs()
-            #assert (diff.sum(axis=-1) == 0).sum().item() == 1
+
+            check_value = (diff.sum(axis=-1) == 0).sum().item()
+            assert check_value == 1, f"{check_value}"
