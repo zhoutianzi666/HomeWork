@@ -71,26 +71,22 @@ template <class TensorS, class TensorD, class ThreadLayout, class VecLayout>
 __global__ void copy_kernel_vectorized(TensorS S, TensorD D, ThreadLayout, VecLayout)
 {
 
-  if (threadIdx.x == 0) {
+  if (threadIdx.x == 0 && 0) {
     int sm_id;
     // asm volatile("mov.u32 %0, %nsmid;" :"=r"(sm_id));
     asm volatile("mov.u32 %0, %smid;" :"=r"(sm_id));
     printf("sm_id %d\n", sm_id);
   }
- return;
 
   using namespace cute;
   using Element = typename TensorS::value_type;
   
-  if (thread0())
-  {
+  if (thread0() && 0) {
       printf("%d\n", size<2>(S));
       print(S.stride());
-  printf("\n");
-  printf("\n");
+      printf("\n");
+      printf("\n");
   }
-    //((_128,_64),2,8)((_1,256),_128,16384) // LayoutLeft{}
-  // ((_128,_64),2,8)((512,_1),65536,_64) // LayoutRight{}
 
   // Slice the tensors to obtain a view into each tile.
   Tensor tile_S = S(make_coord(_, _), blockIdx.x, blockIdx.y);  // (BlockShape_M, BlockShape_N)
@@ -117,12 +113,16 @@ __global__ void copy_kernel_vectorized(TensorS S, TensorD D, ThreadLayout, VecLa
   // Construct a Tensor corresponding to each thread's slice.
   auto thr_copy = tiled_copy.get_thread_slice(threadIdx.x);
 
-  Tensor thr_tile_S = thr_copy.partition_S(tile_S);             // (CopyOp, CopyM, CopyN)
-  Tensor thr_tile_D = thr_copy.partition_D(tile_D);             // (CopyOp, CopyM, CopyN)
+  if (thread0()){
+    print_latex(tiled_copy);
+  }
+
+  Tensor thr_tile_S = thr_copy.partition_S(tile_S);             
+  Tensor thr_tile_D = thr_copy.partition_D(tile_D);             
 
   // Construct a register-backed Tensor with the same shape as each thread's partition
   // Use make_fragment because the first mode is the instruction-local mode
-  Tensor fragment = make_fragment_like(thr_tile_D);             // (CopyOp, CopyM, CopyN)
+  Tensor fragment = make_fragment_like(thr_tile_D);
 
 
   // Copy from GMEM to RMEM and from RMEM to GMEM
@@ -144,7 +144,10 @@ __global__ void copy_kernel_vectorized(TensorS S, TensorD D, ThreadLayout, VecLa
   //   }
   // }
 
-  copy(tiled_copy, fragment(_,_,_), thr_tile_D(_,_,_));
+  // copy(tiled_copy, fragment(_,_,_), thr_tile_D(_,_,_));
+
+
+  //copy(tiled_copy, thr_tile_S, thr_tile_D);
 }
 
 /// Main function
@@ -153,12 +156,7 @@ int main(int argc, char** argv) {
   using namespace cute;
   using Element = float;
 
-  // Define a tensor shape with dynamic extents (m, n)
-  auto tensor_shape = make_shape(256, 512);
-
-  //
-  // Allocate and initialize
-  //
+  auto tensor_shape = make_shape(128, 64);
 
   thrust::host_vector<Element> h_S(size(tensor_shape));
   thrust::host_vector<Element> h_D(size(tensor_shape));
@@ -180,10 +178,6 @@ int main(int argc, char** argv) {
   make_tensor(make_gmem_ptr(thrust::raw_pointer_cast(d_D.data())), 
   make_layout(tensor_shape, LayoutRight{}));
 
-  //
-  // Tile tensors
-  //
-
   // Define a statically sized block (M, N).
   // Note, by convention, capital letters are used to represent static modes.
   auto block_shape = make_shape(Int<128>{}, Int<64>{});
@@ -195,10 +189,10 @@ int main(int argc, char** argv) {
   //   return -1;
   // }
   // Equivalent check to the above
-  if (not weakly_compatible(block_shape, tensor_shape)) {
-    std::cerr << "Expected the tensors to be weakly compatible with the block_shape." << std::endl;
-    return -1;
-  }
+  // if (not weakly_compatible(block_shape, tensor_shape)) {
+  //   std::cerr << "Expected the tensors to be weakly compatible with the block_shape." << std::endl;
+  //   return -1;
+  // }
 
   // Tile the tensor (m, n) ==> ((M, N), m', n') where (M, N) is the static tile
   // shape, and modes (m', n') correspond to the number of tiles.
@@ -218,18 +212,11 @@ int main(int argc, char** argv) {
   // Vector dimensions
   Layout vec_layout = make_layout(make_shape(Int<1>{}, Int<4>{}), LayoutRight{});
 
-  print_latex(vec_layout);
-
-  //
-  // Determine grid and block dimensions
-  //
+  //print_latex(vec_layout);
 
   dim3 gridDim (size<1>(tiled_tensor_D), size<2>(tiled_tensor_D));   // Grid shape corresponds to modes m' and n'
   dim3 blockDim(size(thr_layout));
 
-  //
-  // Launch the kernel
-  //
   copy_kernel_vectorized<<< gridDim, blockDim >>>(
     tiled_tensor_S,
     tiled_tensor_D,
@@ -242,10 +229,7 @@ int main(int argc, char** argv) {
     return -1;
   }
 
-  //
   // Verify
-  //
-
   h_D = d_D;
 
   int32_t errors = 0;
