@@ -3,7 +3,6 @@ import paddle
 import paddle.distributed as dist
 import paddle.distributed.communication.deep_ep as ep
 from paddle.base import core
-from paddle.base.core import Config
 from paddle.distributed import fleet
 from paddle.distributed.communication.group import Group
 
