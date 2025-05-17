@@ -28,7 +28,7 @@ topk_idx = topk_info[1]
 
 gather_x = []
 dist.all_gather(gather_x, x, ep_group)
-gather_x = paddle.concat(gather_x, axis=0)
+gather_x = paddle.stack(gather_x, axis=0)
 
 gather_topk_idx = []
 dist.all_gather(gather_topk_idx, topk_idx, ep_group)
@@ -37,15 +37,19 @@ gather_topk_idx = paddle.concat(gather_topk_idx, axis=0)
 ffn2_out = paddle.zeros([1])
 
 from paddle.framework import core
-core.nvprof_start()
+#core.nvprof_start()
 
+
+#moe_in_w4a8_scale = paddle.randn([num_experts])
+moe_in_w4a8_scale = None
+handle = None
 aa = paddle.randn([120,300])
-
 for i in range(100):
-    packed_recv_x, packed_recv_count, handle1, event, hook = buffer.low_latency_dispatch(x, topk_idx, num_tokens, num_experts,False, False, return_recv_hook=True)
+    packed_recv_x, packed_recv_count, handle, event, hook = buffer.low_latency_dispatch(x, topk_idx, moe_in_w4a8_scale, num_tokens, num_experts,False, False, return_recv_hook=False)
     
-    for j in range(200):
-        aa = aa + aa
+    
+    # for j in range(200):
+    #     aa = aa + aa
     paddle.distributed.barrier()
 
     if hook is not None:
@@ -67,8 +71,7 @@ for i in range(100):
     dist.all_reduce(ffn2_out)
     # paddle.distributed.barrier()
 
-core.nvprof_stop()
-
+# #core.nvprof_stop()
 
 num_local_experts = num_experts // num_ranks
 start_ep_id = rank_id * num_local_experts
@@ -81,15 +84,31 @@ for token_id in range(topk_idx.shape[0]):
             num_tokens_send_by_rdma += 1
 print("num_tokens_send_by_rdma:", num_tokens_send_by_rdma)
 
-for token_id in range(gather_topk_idx.shape[0]):
-    tmp = gather_topk_idx[token_id].numpy().tolist()
-    token = gather_x[token_id].view("int16")
-    for j in range(start_ep_id, start_ep_id + num_local_experts):
-        if j in tmp:
-            local_ep_id = j-start_ep_id
-            deep_ep_res = packed_recv_x[local_ep_id,:packed_recv_count[local_ep_id],:].view("int16")
-            diff = paddle.bitwise_xor(token, deep_ep_res)
-            diff = diff.cast("int32").abs()
 
-            check_value = (diff.sum(axis=-1) == 0).sum().item()
-            assert check_value == 1, f"{check_value}"
+(recv_src_info, recv_layout_range, _, _) = handle
+
+for ep_id in range(start_ep_id, end_ep_id):
+    local_ep_id = ep_id - start_ep_id
+    token_num_this_ep = packed_recv_count[local_ep_id].item()
+    token_nums_per_rank = []
+    begin_idx_per_rank = []
+    for rank_id in range(num_ranks):
+        tmp = recv_layout_range[local_ep_id,rank_id].item()
+        begin_idx_per_rank.append(tmp >> 32)
+        token_nums_per_rank.append(tmp & ((1<<32)-1))
+    assert token_num_this_ep == sum(token_nums_per_rank)
+
+    for rank_id in range(num_ranks):
+        begin_idx = begin_idx_per_rank[rank_id]
+        end_idx = begin_idx + token_nums_per_rank[rank_id]
+        for token_id in range(begin_idx, end_idx):
+            token = packed_recv_x[local_ep_id, token_id, :]
+            # 这个token来自rank_id，并且是他的第多少个token呢？
+            src_token_id = recv_src_info[local_ep_id,token_id].item()
+            src_token = gather_x[rank_id,src_token_id,:]
+            if moe_in_w4a8_scale is not None:
+                src_token = src_token.cast("float32").cast("int8")
+                src_token = src_token.cast("int32")
+                token = token.cast("int32")
+            print(src_token - token)
+            assert (src_token-token).abs().max().item() == 0
