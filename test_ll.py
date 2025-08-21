@@ -34,44 +34,44 @@ gather_topk_idx = []
 dist.all_gather(gather_topk_idx, topk_idx, ep_group)
 gather_topk_idx = paddle.concat(gather_topk_idx, axis=0)
 
-ffn2_out = paddle.zeros([1])
+one_zero = paddle.zeros([1])
 
 from paddle.framework import core
 #core.nvprof_start()
 
 
-#moe_in_w4a8_scale = paddle.randn([num_experts])
+moe_in_w4a8_scale = paddle.randn([num_experts])
+dist.broadcast(moe_in_w4a8_scale, src=0)
 moe_in_w4a8_scale = None
 handle = None
-aa = paddle.randn([120,300])
 for i in range(100):
-    packed_recv_x, packed_recv_count, handle, event, hook = buffer.low_latency_dispatch(x, topk_idx, moe_in_w4a8_scale, num_tokens, num_experts,False, False, return_recv_hook=False)
+    dist.all_reduce(one_zero)
     
-    
-    # for j in range(200):
-    #     aa = aa + aa
+    use_fp8 = False
+    packed_recv_x, packed_recv_count, handle, event, hook = buffer.low_latency_dispatch(x, topk_idx, moe_in_w4a8_scale, num_tokens, num_experts,use_fp8, False, return_recv_hook=False)
+
     paddle.distributed.barrier()
 
     if hook is not None:
         hook()
-    continue
-    fp8, scale = packed_recv_x[0], packed_recv_x[1]
-    fp32 = fp8.cast("float32").reshape([0,0,hidden//128,128])
-    scale = scale.transpose([0,2,1]).reshape([0,0,hidden//128,1])
-    fp32 = fp32 * scale
-    fp32 = fp32.reshape([0,0,-1])
-
-    for i in range(packed_recv_count.shape[0]):
-        tmp = fp32[i,:packed_recv_count[i],:]
-        assert paddle.isnan(tmp).sum().item() == 0
-
-    continue
-    _,_,_ = buffer.low_latency_combine(packed_recv_x, topk_idx, topk_weight, handle, False, False)
+    if use_fp8 :
+        fp8, scale = packed_recv_x[0], packed_recv_x[1]
+        fp32 = fp8.cast("float32").reshape([0,0,hidden//128,128])
+        scale = scale.transpose([0,2,1]).reshape([0,0,hidden//128,1])
+        fp32 = fp32 * scale
+        fp32 = fp32.reshape([0,0,-1])
     
-    dist.all_reduce(ffn2_out)
+    dist.all_reduce(one_zero)
+
+    # 这个use_fp8是我支持combine量化时候做的改动，但是没有合入到paddle develop中！
+    use_fp8=True
+    combined_hidden_states,_,_ = buffer.low_latency_combine(packed_recv_x, topk_idx, topk_weight, handle, False, False,use_fp8)
+    print(combined_hidden_states)
+    continue
+    dist.all_reduce(one_zero)
     # paddle.distributed.barrier()
 
-# #core.nvprof_stop()
+#core.nvprof_stop()
 
 num_local_experts = num_experts // num_ranks
 start_ep_id = rank_id * num_local_experts
@@ -107,8 +107,13 @@ for ep_id in range(start_ep_id, end_ep_id):
             src_token_id = recv_src_info[local_ep_id,token_id].item()
             src_token = gather_x[rank_id,src_token_id,:]
             if moe_in_w4a8_scale is not None:
-                src_token = src_token.cast("float32").cast("int8")
+                src_token = src_token.cast("float32")
+                src_token = 127.0 * moe_in_w4a8_scale[ep_id] * src_token
+                src_token[src_token > 127.0] = 127.0
+                src_token[src_token < -127.0] = -127.0
+                src_token = paddle.round(src_token)
+                src_token = src_token.cast("int8")
                 src_token = src_token.cast("int32")
                 token = token.cast("int32")
-            print(src_token - token)
+            print(token - src_token)
             assert (src_token-token).abs().max().item() == 0
