@@ -48,7 +48,14 @@ int main (int argc, char *argv[]) {
 
     CUDA_CHECK(cudaSetDevice(mype_node));
     CUDA_CHECK(cudaStreamCreate(&stream));
-    int *destination = (int *) nvshmem_malloc (sizeof(int));
+    int *destination = (int *) nvshmem_malloc (sizeof(int) * 128);
+    if (rank == 0) {
+        // 如果打开下面的注释，结果就会崩溃！
+        // 难道必须得是对称的？？
+        // destination += 16;
+    }
+
+    printf("destination地址：%d\n", destination);
 
     simple_shift<<<1, 1, 0, stream>>>(destination);
     nvshmemx_barrier_all_on_stream(stream);

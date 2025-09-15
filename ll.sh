@@ -7,7 +7,11 @@ unset PADDLE_TRAINER_ENDPOINTS
 unset DISTRIBUTED_TRAINER_ENDPOINTS
 unset FLAGS_START_PORT
 unset PADDLE_ELASTIC_TIMEOUT
+<<<<<<< HEAD
 #source /root/paddlejob/workspace/env_run/output/zkk/2025_03_28_45T/wuliji.sh
+=======
+source /root/paddlejob/workspace/env_run/output/zkk/2025_03_28_45T/wuliji.sh
+>>>>>>> origin/master
 nnodes=$PADDLE_TRAINERS_NUM
 rank=$PADDLE_TRAINER_ID
 
@@ -40,7 +44,7 @@ port=36677
 export device="0,1,2,3,4,5,6,7"
 
 export NVSHMEM_IB_GID_INDEX=3
-export NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME=xgbe0
+export NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME=eth0
 export NCCL_DEBUG=info
 export LD_LIBRARY_PATH=/root/paddlejob/workspace/env_run/output/zkk/lidong/nvshmem/lib:$LD_LIBRARY_PATH
 
