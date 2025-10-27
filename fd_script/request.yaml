@@ -1,0 +1,9 @@
+top_p: 1.0
+top_p1: 1.0
+temperature: 1.0
+metadata:
+    training: True
+max_tokens: 200
+min_tokens: 200
+
+
